@@ -9,6 +9,10 @@ input=$(cat)
 # tool_calls carries nested tool inputs that may hold their own "agent_id".
 case ${input%%'"tool_calls"'*} in *'"agent_id"'*) exit 0 ;; esac
 
+# They also skip a turn woken by a background-task notification, which still fires
+# UserPromptSubmit with the notification as its prompt.
+printf '%s' "$input" | grep -q '"prompt" *: *"<task-notification>' && exit 0
+
 transcript=$(printf '%s' "$input" | sed -n 's/.*"transcript_path" *: *"\([^"]*\)".*/\1/p')
 
 # The transcript records the style Claude Code actually applied on each request.
