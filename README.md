@@ -57,14 +57,18 @@ Claude Code 환경에 적합한 Plugin이지만, 글쓰기 지침에 해당하�
    /plugin install fluent-korean@fluent-korean
    ```
    
-2. 설치한 뒤에 '/config' 등의 메뉴에서 output-style 항목을 찾아 둘 중 하나를 선택하세요. (이 플러그인에는 output-style 두 가지가 들어 있습니다.) 
+2. 설치한 뒤에 '/config' 등의 메뉴에서 output-style 항목을 찾아 네 가지 중 하나를 선택하세요. (이 플러그인에는 output-style 네 가지가 들어 있습니다.) 
 3. output-style 특성상, config에서 선택한 후에 새 세션을 시작하거나 `/clear`를 사용해야 변경 사항이 적용됩니다.
 
 
-다음 두 가지 output-style이 포함되어 있습니다.
+다음 네 가지 output-style이 포함되어 있습니다.
 
 `fluent-korean` : 코딩 지침을 유지합니다. 코딩 작업에 사용하세요.
 `fluent-korean-not-coding` : 코딩 지침이 제거되어 있습니다. Claude가 직접 코드를 변경하지 않을 때 사용하세요.
+`fluent-korean-concise` : `fluent-korean`에 Claude Code의 기본 제공 Concise 스타일 지침을 결합했습니다.
+`fluent-korean-not-coding-concise` : `fluent-korean-not-coding`에 Concise 스타일 지침을 결합했습니다.
+
+`-concise` 판은 Concise 스타일의 지침을 이 플러그인의 문체에 맞추어 한국어로 옮긴 '간결성' 단락을 추가하고, 간결함은 문장의 개수와 서술의 분량을 줄여서 달성하며 조사와 어미를 생략해서 달성하지 않는다는 조항을 함께 담고 있습니다. 또한 기본 제공 Concise 스타일은 매 턴마다 "Be concise: ..." 알림을 전달하는데, 플러그인 output-style의 frontmatter로는 이 알림을 지정할 수 없습니다. 그래서 이 플러그인에 포함된 훅(`hooks/concise-reminder.sh`)이 `-concise` 판이 활성화되어 있을 때에만 같은 내용의 알림을 한국어로 추가합니다. 이 알림은 `additionalContext`로 전달되므로 Claude에게만 전달되고 터미널에는 표시되지 않습니다. 훅은 세션 기록에서 활성화된 스타일을 확인하고, 기록이 아직 없는 첫 번째 프롬프트에서는 `/config`가 기록하는 settings 파일을 확인합니다.
 
 
 ## Claude Code CLI 외 다른 환경에서 사용하는 방법
