@@ -1,7 +1,7 @@
 #!/bin/sh
 # Output-style frontmatter has no per-turn reminder field, so a plugin style only gets
-# the generic "<name> output style is active" line. This adds the sentence the built-in
-# Concise style sends each turn, and only while a fluent-korean *-concise style is active.
+# the generic "<name> output style is active" line. This adds, in Korean, the reminder the
+# built-in Concise style sends each turn, and only while a fluent-korean *-concise style is active.
 event=$1
 input=$(cat)
 
@@ -24,4 +24,4 @@ if [ -z "$style" ]; then
 fi
 case $style in *fluent-korean*-concise'"') ;; *) exit 0 ;; esac
 
-printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"Be concise: lead with the result, skip preamble and narration, keep only what the user needs."}}\n' "$event"
+printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"간결하게 답합니다. 결과를 먼저 밝히고, 서두와 작업 과정에 대한 서술은 생략하며, 사용자에게 필요한 내용만 전달합니다."}}\n' "$event"
