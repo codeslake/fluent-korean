@@ -28,7 +28,9 @@ done
 lang=$(printf '%s' "${CLAUDE_PLUGIN_OPTION_REPLY_LANG:-${FLUENT_KOREAN_REPLY_LANG:-}}" | tr -d '"\\')
 case $style in *'"fluent-korean:'*) ;; *) lang= ;; esac
 lang_line=
-[ -n "$lang" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: ${lang}. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
+# Conditional on the user's own language, so a question typed in another language still
+# gets an answer in that language. The prefix up to "언어" stays fixed: measurement keys on it.
+[ -n "$lang" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 사용자가 직접 입력한 마지막 메시지를 ${lang}로 썼다면 ${lang}로 씁니다. 알림이나 다른 세션의 메시지로 시작된 턴에도 이 기준을 따릅니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
 
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$1"; }
 
