@@ -2,6 +2,8 @@
 # Output-style frontmatter has no per-turn reminder field, so a plugin style only gets
 # the generic "<name> output style is active" line. This adds, in Korean, the reminder the
 # built-in Concise style sends each turn, and only while a fluent-korean *-concise style is active.
+# FLUENT_KOREAN_REPLY_LANG (e.g. in settings.json "env") adds one line naming the language of
+# text written for the user; unset, nothing about language is added.
 event=$1
 input=$(cat)
 
@@ -9,9 +11,20 @@ input=$(cat)
 # tool_calls carries nested tool inputs that may hold their own "agent_id".
 case ${input%%'"tool_calls"'*} in *'"agent_id"'*) exit 0 ;; esac
 
-# They also skip a turn woken by a background-task notification, which still fires
-# UserPromptSubmit with the notification as its prompt.
-case $input in *'"prompt"'*':'*'"<task-notification>'*) exit 0 ;; esac
+# Quotes and backslashes would break the JSON below.
+lang=$(printf '%s' "${FLUENT_KOREAN_REPLY_LANG:-}" | tr -d '"\\')
+lang_line=
+[ -n "$lang" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: ${lang}. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
+
+emit() { printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$1"; }
+
+# Built-in reminders also skip a turn woken by a background-task notification, which still
+# fires UserPromptSubmit with the notification as its prompt. The language line does not:
+# such a turn answers the user too.
+case $input in *'"prompt"'*':'*'"<task-notification>'*)
+  [ -n "$lang_line" ] && emit "$lang_line"
+  exit 0 ;;
+esac
 
 # Output-style frontmatter cannot carry hooks (the 2.1.284 schema is name, description,
 # keep-coding-instructions, force-for-plugin, strict) and the hook payload/env carry no
@@ -22,6 +35,9 @@ case $input in *'"prompt"'*':'*'"<task-notification>'*) exit 0 ;; esac
 for f in "${CLAUDE_PROJECT_DIR:-.}/.claude/settings.local.json" "${CLAUDE_PROJECT_DIR:-.}/.claude/settings.json" "$HOME/.claude/settings.local.json" "$HOME/.claude/settings.json"; do
   style=$(grep -o '"outputStyle" *: *"[^"]*"' "$f" 2>/dev/null) && break
 done
-case $style in *fluent-korean*-concise'"') ;; *) exit 0 ;; esac
+concise=
+case $style in *fluent-korean*-concise'"') concise="간결하게 답합니다. 결과를 먼저 밝히고, 서두와 작업 과정에 대한 서술은 생략하며, 사용자에게 필요한 내용만 전달합니다." ;; esac
 
-printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"간결하게 답합니다. 결과를 먼저 밝히고, 서두와 작업 과정에 대한 서술은 생략하며, 사용자에게 필요한 내용만 전달합니다."}}\n' "$event"
+msg="$concise${concise:+${lang_line:+ }}$lang_line"
+[ -n "$msg" ] && emit "$msg"
+exit 0
