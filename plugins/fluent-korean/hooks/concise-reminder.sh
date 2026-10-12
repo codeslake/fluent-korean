@@ -2,9 +2,10 @@
 # Output-style frontmatter has no per-turn reminder field, so a plugin style only gets
 # the generic "<name> output style is active" line. This adds, in Korean, the reminder the
 # built-in Concise style sends each turn, and only while a fluent-korean *-concise style is active.
-# FLUENT_KOREAN_REPLY_LANG (e.g. in settings.json "env") adds one line naming the language of
-# text written for the user, under a fluent-korean style only; unset, nothing about language
-# is added.
+# The plugin option reply_lang (settings.json "pluginConfigs", read from user settings only)
+# adds one line naming the language of text written for the user, under a fluent-korean
+# style only; unset, nothing about language is added. FLUENT_KOREAN_REPLY_LANG in "env" is
+# still read when the option is unset.
 event=$1
 input=$(cat)
 
@@ -24,7 +25,7 @@ done
 
 # Quotes and backslashes would break the JSON below. The language line belongs to the
 # fluent-korean styles only: under any other style it is never added.
-lang=$(printf '%s' "${FLUENT_KOREAN_REPLY_LANG:-}" | tr -d '"\\')
+lang=$(printf '%s' "${CLAUDE_PLUGIN_OPTION_REPLY_LANG:-${FLUENT_KOREAN_REPLY_LANG:-}}" | tr -d '"\\')
 case $style in *'"fluent-korean:'*) ;; *) lang= ;; esac
 lang_line=
 [ -n "$lang" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: ${lang}. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
