@@ -32,6 +32,26 @@ lang_line=
 # gets an answer in that language. The prefix up to "언어" stays fixed: measurement keys on it.
 [ -n "$lang" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 사용자가 직접 입력한 마지막 메시지를 ${lang}로 썼다면 ${lang}로 씁니다. 알림이나 다른 세션의 메시지로 시작된 턴에도 이 기준을 따릅니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
 
+# The model misjudges "the user's last typed message" when the text right before its reply is
+# English (a notification, a peer message, hook feedback, a skill body): measured 13 of 46
+# replies in English with the line above in context. So the hook decides it: each prompt the
+# user typed records whether it was Korean, per session, and later turns state the result.
+# shortcut: Hangul detection only, so this applies when the language is 한국어; any other value
+# keeps the conditional line.
+if [ "$lang" = 한국어 ]; then
+  sid=${input#*'"session_id"'}; sid=${sid#*'"'}; sid=$(printf '%s' "${sid%%'"'*}" | tr -cd 'A-Za-z0-9-')
+  state="${TMPDIR:-/tmp}/fluent-korean-lang-$sid"
+  if [ "$event" = UserPromptSubmit ] && [ -n "$sid" ]; then
+    p=${input#*'"prompt"'}; p=${p#*'"'}
+    case $p in
+      '<'*|/*|'Another Claude session'*|'Stop hook feedback'*|'Here is a note offered by a side agent'*|'Base directory for this skill'*|'[SYSTEM'*) ;;
+      *) if printf '%s' "$p" | LC_ALL=C grep -q "$(printf '[\352-\355]')"; then echo ko > "$state"
+         elif printf '%s' "${p%%'"'*}" | grep -q '[A-Za-z]'; then echo other > "$state"; fi ;;
+    esac
+  fi
+  [ "$(cat "$state" 2>/dev/null)" = ko ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
+fi
+
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$1"; }
 
 # Built-in reminders also skip a turn woken by a background-task notification, which still
