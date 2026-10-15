@@ -13,6 +13,21 @@ input=$(cat)
 # tool_calls carries nested tool inputs that may hold their own "agent_id".
 case ${input%%'"tool_calls"'*} in *'"agent_id"'*) exit 0 ;; esac
 
+# Plugin option ptb_every: remind on every Nth tool batch of a prompt (1, the default, is
+# every batch, as the built-in Concise style does; 0 is never). Nothing can change between
+# batches of one turn, so a larger N cuts repeated context.
+every=$(printf '%s' "${CLAUDE_PLUGIN_OPTION_PTB_EVERY:-1}" | tr -cd 0-9); every=${every:-1}
+if [ "$event" = PostToolBatch ] && [ "$every" -ne 1 ]; then
+  [ "$every" -eq 0 ] && exit 0
+  k=${input#*'"session_id"'}; k=${k#*'"'}; k=$(printf '%s' "${k%%'"'*}" | tr -cd 'A-Za-z0-9-')
+  q=${input#*'"prompt_id"'}; q=${q#*'"'}; q=$(printf '%s' "${q%%'"'*}" | tr -cd 'A-Za-z0-9-')
+  cf="${TMPDIR:-/tmp}/fluent-korean-ptb-$k"
+  read -r cq cn 2>/dev/null < "$cf"
+  [ "$cq" = "$q" ] && n=$((cn + 1)) || n=1
+  echo "$q $n" > "$cf"
+  [ $((n % every)) -eq 0 ] || exit 0
+fi
+
 # Output-style frontmatter cannot carry hooks (the 2.1.284 schema is name, description,
 # keep-coding-instructions, force-for-plugin, strict) and the hook payload/env carry no
 # style, so the settings files /config writes are the only cheap source. First file that
