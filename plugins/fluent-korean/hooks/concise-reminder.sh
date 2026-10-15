@@ -44,7 +44,7 @@ if [ "$lang" = 한국어 ]; then
   if [ "$event" = UserPromptSubmit ] && [ -n "$sid" ]; then
     p=${input#*'"prompt"'}; p=${p#*'"'}
     case $p in
-      '<'*|/*|'Another Claude session'*|'Stop hook feedback'*|'Here is a note offered by a side agent'*|'Base directory for this skill'*|'[SYSTEM'*) ;;
+      '<'*|/*|'Another Claude session'*|'The '*' plugin sent a message:'*|'Stop hook feedback'*|'Here is a note offered by a side agent'*|'Base directory for this skill'*|'[SYSTEM'*) ;;
       *) if printf '%s' "$p" | LC_ALL=C grep -q "$(printf '[\352-\355]')"; then echo ko > "$state"
          elif printf '%s' "${p%%'"'*}" | grep -q '[A-Za-z]'; then echo other > "$state"; fi ;;
     esac
