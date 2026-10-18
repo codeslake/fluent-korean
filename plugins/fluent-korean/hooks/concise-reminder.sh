@@ -13,6 +13,21 @@ input=$(cat)
 # tool_calls carries nested tool inputs that may hold their own "agent_id".
 case ${input%%'"tool_calls"'*} in *'"agent_id"'*) exit 0 ;; esac
 
+# Plugin option ptb_every: remind on every Nth tool batch of a prompt (1, the default, is
+# every batch, as the built-in Concise style does; 0 is never). Nothing can change between
+# batches of one turn, so a larger N cuts repeated context.
+every=$(printf '%s' "${CLAUDE_PLUGIN_OPTION_PTB_EVERY:-1}" | tr -cd 0-9); every=${every:-1}
+if [ "$event" = PostToolBatch ] && [ "$every" -ne 1 ]; then
+  [ "$every" -eq 0 ] && exit 0
+  k=${input#*'"session_id"'}; k=${k#*'"'}; k=$(printf '%s' "${k%%'"'*}" | tr -cd 'A-Za-z0-9-')
+  q=${input#*'"prompt_id"'}; q=${q#*'"'}; q=$(printf '%s' "${q%%'"'*}" | tr -cd 'A-Za-z0-9-')
+  cf="${TMPDIR:-/tmp}/fluent-korean-ptb-$k"
+  read -r cq cn 2>/dev/null < "$cf"
+  [ "$cq" = "$q" ] && n=$((cn + 1)) || n=1
+  echo "$q $n" > "$cf"
+  [ $((n % every)) -eq 0 ] || exit 0
+fi
+
 # Output-style frontmatter cannot carry hooks (the 2.1.284 schema is name, description,
 # keep-coding-instructions, force-for-plugin, strict) and the hook payload/env carry no
 # style, so the settings files /config writes are the only cheap source. First file that
@@ -49,7 +64,11 @@ if [ "$lang" = 한국어 ]; then
          elif printf '%s' "${p%%'"'*}" | grep -q '[A-Za-z]'; then echo other > "$state"; fi ;;
     esac
   fi
-  [ "$(cat "$state" 2>/dev/null)" = ko ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
+  # No record means the user has typed nothing in this session yet (a fresh start, a /clear,
+  # a turn opened by a plugin or a notification): a fluent-korean style then means Korean.
+  rec=$(cat "$state" 2>/dev/null)
+  [ -z "$rec" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 이 세션에서 사용자가 직접 입력한 메시지가 아직 없으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
+  [ "$rec" = ko ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
 fi
 
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$1"; }
