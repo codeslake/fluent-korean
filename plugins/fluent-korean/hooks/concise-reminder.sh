@@ -58,8 +58,13 @@ if [ "$lang" = 한국어 ]; then
   state="${TMPDIR:-/tmp}/fluent-korean-lang-$sid"
   if [ "$event" = UserPromptSubmit ] && [ -n "$sid" ]; then
     p=${input#*'"prompt"'}; p=${p#*'"'}
+    # A side agent's note is forwarded by the user, often with their own words after the
+    # quoted ("> ") lines: keep only those words.
+    case $p in 'Here is a note offered by a side agent'*)
+      p=${p##*'\n>'}; case $p in *'\n'*) p=${p#*'\n'} ;; *) p= ;; esac ;;
+    esac
     case $p in
-      '<'*|/*|'Another Claude session'*|'The '*' plugin sent a message:'*|'Stop hook feedback'*|'Here is a note offered by a side agent'*|'Base directory for this skill'*|'[SYSTEM'*) ;;
+      '<'*|/*|'Another Claude session'*|'The '*' plugin sent a message:'*|'Stop hook feedback'*|'Base directory for this skill'*|'[SYSTEM'*) ;;
       *) if printf '%s' "$p" | LC_ALL=C grep -q "$(printf '[\352-\355]')"; then echo ko > "$state"
          elif printf '%s' "${p%%'"'*}" | grep -q '[A-Za-z]'; then echo other > "$state"; fi ;;
     esac
