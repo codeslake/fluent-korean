@@ -7,6 +7,7 @@
 # style only; unset, nothing about language is added. FLUENT_KOREAN_REPLY_LANG in "env" is
 # still read when the option is unset.
 event=$1
+skip=
 input=$(cat)
 
 # Built-in style reminders skip subagents. Only the top-level keys are checked:
@@ -17,15 +18,16 @@ case ${input%%'"tool_calls"'*} in *'"agent_id"'*) exit 0 ;; esac
 # every batch, as the built-in Concise style does; 0 is never). Nothing can change between
 # batches of one turn, so a larger N cuts repeated context.
 every=$(printf '%s' "${CLAUDE_PLUGIN_OPTION_PTB_EVERY:-1}" | tr -cd 0-9); every=${every:-1}
-if [ "$event" = PostToolBatch ] && [ "$every" -ne 1 ]; then
-  [ "$every" -eq 0 ] && exit 0
+if [ "$event" = PostToolBatch ] && [ "$every" -eq 0 ]; then
+  skip=1
+elif [ "$event" = PostToolBatch ] && [ "$every" -ne 1 ]; then
   k=${input#*'"session_id"'}; k=${k#*'"'}; k=$(printf '%s' "${k%%'"'*}" | tr -cd 'A-Za-z0-9-')
   q=${input#*'"prompt_id"'}; q=${q#*'"'}; q=$(printf '%s' "${q%%'"'*}" | tr -cd 'A-Za-z0-9-')
   cf="${TMPDIR:-/tmp}/fluent-korean-ptb-$k"
   read -r cq cn 2>/dev/null < "$cf"
   [ "$cq" = "$q" ] && n=$((cn + 1)) || n=1
   echo "$q $n" > "$cf"
-  [ $((n % every)) -eq 0 ] || exit 0
+  [ $((n % every)) -eq 0 ] || skip=1
 fi
 
 # Output-style frontmatter cannot carry hooks (the 2.1.284 schema is name, description,
@@ -48,32 +50,62 @@ lang_line=
 [ -n "$lang" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 사용자가 직접 입력한 마지막 메시지를 ${lang}로 썼다면 ${lang}로 씁니다. 알림이나 다른 세션의 메시지로 시작된 턴에도 이 기준을 따릅니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
 
 # The model misjudges "the user's last typed message" when the text right before its reply is
-# English (a notification, a peer message, hook feedback, a skill body): measured 13 of 46
-# replies in English with the line above in context. So the hook decides it: each prompt the
-# user typed records whether it was Korean, per session, and later turns state the result.
+# English (a notification, a peer message, hook feedback, a skill body), so the hook decides it
+# from the transcript: the last prompt whose origin is "human" (typed or queued by the user;
+# plugin, peer and notification prompts carry their own origin kind, and the hook payload does
+# not say which one it is). The prompt being submitted is not in the transcript yet, so a
+# UserPromptSubmit sees the previous one, which is what "last typed" means until it lands.
+# Once one user-facing text slips into English the next ones follow it about half the time,
+# and the standing line does not break that (measured: 46% English after an English text with
+# the line in between, 9% after a Korean one), so an English last text is quoted back.
 # shortcut: Hangul detection only, so this applies when the language is 한국어; any other value
 # keeps the conditional line.
 if [ "$lang" = 한국어 ]; then
-  sid=${input#*'"session_id"'}; sid=${sid#*'"'}; sid=$(printf '%s' "${sid%%'"'*}" | tr -cd 'A-Za-z0-9-')
-  state="${TMPDIR:-/tmp}/fluent-korean-lang-$sid"
-  if [ "$event" = UserPromptSubmit ] && [ -n "$sid" ]; then
-    p=${input#*'"prompt"'}; p=${p#*'"'}
-    # A side agent's note is forwarded by the user, often with their own words after the
-    # quoted ("> ") lines: keep only those words.
-    case $p in 'Here is a note offered by a side agent'*)
-      p=${p##*'\n>'}; case $p in *'\n'*) p=${p#*'\n'} ;; *) p= ;; esac ;;
-    esac
-    case $p in
-      '<'*|/*|'Another Claude session'*|'The '*' plugin sent a message:'*|'Stop hook feedback'*|'Base directory for this skill'*|'[SYSTEM'*) ;;
-      *) if printf '%s' "$p" | LC_ALL=C grep -q "$(printf '[\352-\355]')"; then echo ko > "$state"
-         elif printf '%s' "${p%%'"'*}" | grep -q '[A-Za-z]'; then echo other > "$state"; fi ;;
-    esac
-  fi
-  # No record means the user has typed nothing in this session yet (a fresh start, a /clear,
-  # a turn opened by a plugin or a notification): a fluent-korean style then means Korean.
-  rec=$(cat "$state" 2>/dev/null)
-  [ -z "$rec" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 이 세션에서 사용자가 직접 입력한 메시지가 아직 없으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
-  [ "$rec" = ko ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
+  tp=${input#*'"transcript_path"'}; tp=${tp#*'"'}; tp=${tp%%'"'*}
+  got=$(python3 -I - "$tp" 2>/dev/null <<'PY'
+import json, os, re, sys
+def lang(t):
+    t = re.sub(r'```.*?```|`[^`]*`|https?://\S+|(?:~|/)[\w./-]+', ' ', t, flags=re.S)
+    h, a = len(re.findall('[가-힣]', t)), len(re.findall('[A-Za-z]', t))
+    return ('ko' if h else ('other' if a else None)), t, h, a
+def text(c):
+    return c if isinstance(c, str) else ''.join(b.get('text', '') for b in (c or []) if isinstance(b, dict) and b.get('type') == 'text')
+p = sys.argv[1]; rec = drift = None
+try:
+    size = os.path.getsize(p)
+except OSError:
+    print('none|'); sys.exit()
+for start in (max(0, size - 1000000), 0):
+    with open(p, 'rb') as f:
+        f.seek(start); lines = f.read().decode('utf-8', 'replace').splitlines()
+    for l in reversed(lines):
+        if rec and drift is not None: break
+        try: r = json.loads(l)
+        except ValueError: continue
+        if not isinstance(r, dict) or r.get('isSidechain'): continue
+        m = (r.get('message') or {}).get('content')
+        if drift is None and r.get('type') == 'assistant':
+            ts = [b.get('text', '') for b in (m or []) if isinstance(b, dict) and b.get('type') == 'text' and b.get('text', '').strip()]
+            if ts:
+                g, s, h, a = lang(ts[-1])
+                drift = re.sub(r'[\x00-\x1f"\\]', ' ', ' '.join(s.split()))[:60] if h < a * 0.2 and a >= 20 else ''
+        if not rec and r.get('type') == 'user' and (r.get('origin') or {}).get('kind') == 'human':
+            s = text(m)
+            # a side agent's note forwarded by the user: only the words typed after the quoted lines
+            if s.startswith('Here is a note offered by a side agent'):
+                s = '\n'.join(x for x in s.splitlines()[1:] if not x.startswith('>'))
+            if s.strip() and not s.lstrip().startswith(('<', '/')):
+                rec = lang(s)[0]
+    if rec or start == 0: break
+print('%s|%s' % (rec or 'none', drift or ''))
+PY
+)
+  rec=${got%%|*}; drift=${got#*|}
+  case $rec in
+    none|'') lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 이 세션에서 사용자가 직접 입력한 메시지가 아직 없으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
+    ko) lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
+  esac
+  case $rec in none|''|ko) [ -n "$drift" ] && lang_line="${lang_line%%.*}. 직전에 사용자에게 쓴 글이 영어였습니다(「${drift}…」). ${lang_line#*. }" && skip= ;; esac
 fi
 
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$1"; }
@@ -89,6 +121,7 @@ esac
 concise=
 case $style in *fluent-korean*-concise'"') concise="간결하게 답합니다. 결과를 먼저 밝히고, 서두와 작업 과정에 대한 서술은 생략하며, 사용자에게 필요한 내용만 전달합니다." ;; esac
 
+[ -n "$skip" ] && exit 0
 msg="$concise${concise:+${lang_line:+ }}$lang_line"
 [ -n "$msg" ] && emit "$msg"
 exit 0
