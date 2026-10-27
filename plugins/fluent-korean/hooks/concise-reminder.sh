@@ -60,9 +60,14 @@ lang_line=
 # the line in between, 9% after a Korean one), so an English last text is quoted back.
 # shortcut: Hangul detection only, so this applies when the language is 한국어; any other value
 # keeps the conditional line.
-if [ "$lang" = 한국어 ]; then
+# A program, not a person, reads an Agent SDK or -p session's reply: the Korean default and the
+# Stop rewrite would corrupt its result, so only the conditional line applies there.
+sdk=; case ${CLAUDE_CODE_ENTRYPOINT:-} in sdk-*) sdk=1 ;; esac
+if [ "$lang" = 한국어 ] && [ -z "$sdk" ]; then
   tp=${input#*'"transcript_path"'}; tp=${tp#*'"'}; tp=${tp%%'"'*}
-  got=$(python3 -I - "$tp" 2>/dev/null <<'PY'
+  # The payload goes to a file: a tool batch can carry megabytes of output.
+  pf=$(mktemp "${TMPDIR:-/tmp}/fluent-korean-payload.XXXXXX") && printf '%s' "$input" > "$pf"
+  got=$(python3 -I - "$tp" "$pf" 2>/dev/null <<'PY'
 import json, os, re, sys
 def lang(t):
     t = re.sub(r'```.*?```|`[^`]*`|https?://\S+|(?:~|/)[\w./-]+', ' ', t, flags=re.S)
@@ -97,15 +102,34 @@ for start in (max(0, size - 1000000), 0):
             if s.strip() and not s.lstrip().startswith(('<', '/')):
                 rec = lang(s)[0]
     if rec or start == 0: break
-print('%s|%s' % (rec or 'none', drift or ''))
+try:
+    pl = json.load(open(sys.argv[2]))
+except (OSError, ValueError): pl = {}
+# A final reply that came out in English is caught before the turn ends, not only named on the
+# next prompt: the owner reads it now. stop_hook_active means this reply is already the rewrite.
+final = ''
+try:
+    if pl.get('hook_event_name') == 'Stop' and not pl.get('stop_hook_active'):
+        t = '\n'.join(x for x in str(pl.get('last_assistant_message') or '').splitlines() if not x.lstrip().startswith('>'))
+        g, s, h, a = lang(t)
+        if a >= 40 and h * 5 < a: final = 'en'
+except AttributeError: pass
+print('%s|%s|%s' % (rec or 'none', drift or '', final))
 PY
 )
-  rec=${got%%|*}; drift=${got#*|}
+  rm -f "$pf"
+  rec=${got%%|*}; rest=${got#*|}; drift=${rest%%|*}; final=${rest#*|}
   case $rec in
     none|'') lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 이 세션에서 사용자가 직접 입력한 메시지가 아직 없으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
     ko) lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
   esac
+  base=$lang_line
   case $rec in none|''|ko) [ -n "$drift" ] && lang_line="${lang_line%%.*}. 직전에 사용자에게 쓴 글이 영어였습니다(「${drift}…」). ${lang_line#*. }" && skip= ;; esac
+fi
+
+if [ "$event" = Stop ]; then
+  case $rec in none|''|ko) [ "$final" = en ] && printf '{"decision":"block","reason":"%s"}\n' "방금 사용자에게 쓴 최종 답변이 영어입니다. ${base#*. } 사용자가 영어 답변을 직접 요청한 경우가 아니라면, 같은 내용을 한국어로 다시 써서 답합니다. 코드, 명령, 식별자, 인용문은 원래 형태로 둡니다." ;; esac
+  exit 0
 fi
 
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$1"; }
