@@ -60,7 +60,10 @@ lang_line=
 # the line in between, 9% after a Korean one), so an English last text is quoted back.
 # shortcut: Hangul detection only, so this applies when the language is 한국어; any other value
 # keeps the conditional line.
-if [ "$lang" = 한국어 ]; then
+# A program, not a person, reads an Agent SDK or -p session's reply: the Korean default and the
+# Stop rewrite would corrupt its result, so only the conditional line applies there.
+sdk=; case ${CLAUDE_CODE_ENTRYPOINT:-} in sdk-*) sdk=1 ;; esac
+if [ "$lang" = 한국어 ] && [ -z "$sdk" ]; then
   tp=${input#*'"transcript_path"'}; tp=${tp#*'"'}; tp=${tp%%'"'*}
   # The payload goes to a file: a tool batch can carry megabytes of output.
   pf=$(mktemp "${TMPDIR:-/tmp}/fluent-korean-payload.XXXXXX") && printf '%s' "$input" > "$pf"
@@ -99,16 +102,9 @@ for start in (max(0, size - 1000000), 0):
             if s.strip() and not s.lstrip().startswith(('<', '/')):
                 rec = lang(s)[0]
     if rec or start == 0: break
-# Experiment (2026-10-20): the first slip into English comes mostly right after tool output
-# (11.8% vs 2.7% with no tool call). Sessions whose id ends in an even hex digit get a line
-# naming English tool output, so the two halves can be compared in the field.
-tool = ''
 try:
     pl = json.load(open(sys.argv[2]))
-    if pl.get('hook_event_name') == 'PostToolBatch' and int(pl.get('session_id', 'x')[-1], 16) % 2 == 0:
-        out = ' '.join(str(c.get('tool_response', '')) for c in pl.get('tool_calls') or [] if isinstance(c, dict))
-        if len(re.findall('[A-Za-z]', out)) >= 300 and len(re.findall('[가-힣]', out)) * 20 < len(re.findall('[A-Za-z]', out)): tool = 'en'
-except (OSError, ValueError, IndexError): pass
+except (OSError, ValueError): pl = {}
 # A final reply that came out in English is caught before the turn ends, not only named on the
 # next prompt: the owner reads it now. stop_hook_active means this reply is already the rewrite.
 final = ''
@@ -117,19 +113,18 @@ try:
         t = '\n'.join(x for x in str(pl.get('last_assistant_message') or '').splitlines() if not x.lstrip().startswith('>'))
         g, s, h, a = lang(t)
         if a >= 40 and h * 5 < a: final = 'en'
-except NameError: pass
-print('%s|%s|%s|%s' % (rec or 'none', drift or '', tool, final))
+except AttributeError: pass
+print('%s|%s|%s' % (rec or 'none', drift or '', final))
 PY
 )
   rm -f "$pf"
-  rec=${got%%|*}; rest=${got#*|}; drift=${rest%%|*}; rest=${rest#*|}; tool=${rest%%|*}; final=${rest#*|}
+  rec=${got%%|*}; rest=${got#*|}; drift=${rest%%|*}; final=${rest#*|}
   case $rec in
     none|'') lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 이 세션에서 사용자가 직접 입력한 메시지가 아직 없으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
     ko) lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
   esac
   base=$lang_line
   case $rec in none|''|ko) [ -n "$drift" ] && lang_line="${lang_line%%.*}. 직전에 사용자에게 쓴 글이 영어였습니다(「${drift}…」). ${lang_line#*. }" && skip= ;; esac
-  case $rec in none|''|ko) [ -z "$drift" ] && [ "$tool" = en ] && lang_line="${lang_line%%.*}. 방금 받은 도구 출력이 영어입니다. 이어서 쓰는 글은 한 줄짜리 진행 보고도 한국어로 씁니다. ${lang_line#*. }" && skip= ;; esac
 fi
 
 if [ "$event" = Stop ]; then
