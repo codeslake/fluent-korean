@@ -30,13 +30,15 @@ elif [ "$event" = PostToolBatch ] && [ "$every" -ne 1 ]; then
   [ $((n % every)) -eq 0 ] || skip=1
 fi
 
-# Output-style frontmatter cannot carry hooks (the 2.1.284 schema is name, description,
-# keep-coding-instructions, force-for-plugin, strict) and the hook payload/env carry no
-# style, so the settings files /config writes are the only cheap source. First file that
-# has an "outputStyle" key wins, nearest first.
-# ponytail: misses a style set only via --settings or managed policy, which never lands
-# in one of these files.
-for f in "${CLAUDE_PROJECT_DIR:-.}/.claude/settings.local.json" "${CLAUDE_PROJECT_DIR:-.}/.claude/settings.json" "$HOME/.claude/settings.local.json" "$HOME/.claude/settings.json"; do
+# Output-style frontmatter cannot carry hooks and the hook payload/env carry no style. The
+# session's own transcript records the active style (an output_style attachment per request),
+# so two sessions of one project can run different styles: the latest one wins. Before the
+# first record lands (a session's first prompt), the settings files /config writes, nearest
+# first.
+# shortcut: misses a style set only via --settings or managed policy on that first prompt.
+tp=${input#*'"transcript_path"'}; tp=${tp#*'"'}; tp=${tp%%'"'*}
+style=$(tail -c 3000000 "$tp" 2>/dev/null | grep -o '"type": *"output_style", *"style": *"[^"]*"' | tail -1)
+[ -n "$style" ] || for f in "${CLAUDE_PROJECT_DIR:-.}/.claude/settings.local.json" "${CLAUDE_PROJECT_DIR:-.}/.claude/settings.json" "$HOME/.claude/settings.local.json" "$HOME/.claude/settings.json"; do
   style=$(grep -o '"outputStyle" *: *"[^"]*"' "$f" 2>/dev/null) && break
 done
 
@@ -64,7 +66,6 @@ lang_line=
 # Stop rewrite would corrupt its result, so only the conditional line applies there.
 sdk=; case ${CLAUDE_CODE_ENTRYPOINT:-} in sdk-*) sdk=1 ;; esac
 if [ "$lang" = 한국어 ] && [ -z "$sdk" ]; then
-  tp=${input#*'"transcript_path"'}; tp=${tp#*'"'}; tp=${tp%%'"'*}
   # The payload goes to a file: a tool batch can carry megabytes of output.
   pf=$(mktemp "${TMPDIR:-/tmp}/fluent-korean-payload.XXXXXX") && printf '%s' "$input" > "$pf"
   got=$(python3 -I - "$tp" "$pf" 2>/dev/null <<'PY'
