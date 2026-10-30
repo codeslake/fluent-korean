@@ -71,7 +71,8 @@ if [ "$lang" = 한국어 ] && [ -z "$sdk" ]; then
   got=$(python3 -I - "$tp" "$pf" 2>/dev/null <<'PY'
 import json, os, re, sys
 def lang(t):
-    t = re.sub(r'```.*?```|`[^`]*`|https?://\S+|(?:~|/)[\w./-]+', ' ', t, flags=re.S)
+    # code, links, paths, data: URIs and long base64 runs carry no language
+    t = re.sub(r'```.*?```|`[^`]*`|https?://\S+|data:[^\s)]+|[A-Za-z0-9+/=]{40,}|(?:~|/)[\w./-]+', ' ', t, flags=re.S)
     h, a = len(re.findall('[가-힣]', t)), len(re.findall('[A-Za-z]', t))
     return ('ko' if h else ('other' if a else None)), t, h, a
 def text(c):
