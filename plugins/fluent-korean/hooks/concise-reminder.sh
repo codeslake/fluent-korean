@@ -77,7 +77,7 @@ def lang(t):
     return ('ko' if h else ('other' if a else None)), t, h, a
 def text(c):
     return c if isinstance(c, str) else ''.join(b.get('text', '') for b in (c or []) if isinstance(b, dict) and b.get('type') == 'text')
-p = sys.argv[1]; rec = drift = None
+p = sys.argv[1]; rec = drift = fb = None
 try:
     size = os.path.getsize(p)
 except OSError:
@@ -91,6 +91,7 @@ for start in (max(0, size - 1000000), 0):
         except ValueError: continue
         if not isinstance(r, dict) or r.get('isSidechain'): continue
         m = (r.get('message') or {}).get('content')
+        if fb is None and not rec and r.get('type') == 'user' and text(m).startswith('Stop hook feedback:'): fb = text(m)
         if drift is None and r.get('type') == 'assistant':
             ts = [b.get('text', '') for b in (m or []) if isinstance(b, dict) and b.get('type') == 'text' and b.get('text', '').strip()]
             if ts:
@@ -108,10 +109,11 @@ try:
     pl = json.load(open(sys.argv[2]))
 except (OSError, ValueError): pl = {}
 # A final reply that came out in English is caught before the turn ends, not only named on the
-# next prompt: the owner reads it now. stop_hook_active means this reply is already the rewrite.
+# next prompt: the owner reads it now. stop_hook_active is set after ANY Stop
+# block, another plugin's too, so this reply is the rewrite only when the latest block this turn was ours.
 final = ''
 try:
-    if pl.get('hook_event_name') == 'Stop' and not pl.get('stop_hook_active'):
+    if pl.get('hook_event_name') == 'Stop' and not (pl.get('stop_hook_active') and fb and '최종 답변이 영어' in fb):
         t = '\n'.join(x for x in str(pl.get('last_assistant_message') or '').splitlines() if not x.lstrip().startswith('>'))
         g, s, h, a = lang(t)
         if a >= 40 and h * 5 < a: final = 'en'
