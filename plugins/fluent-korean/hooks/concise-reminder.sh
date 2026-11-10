@@ -46,7 +46,7 @@ done
 # fluent-korean styles only: under any other style it is never added.
 lang=$(printf '%s' "${CLAUDE_PLUGIN_OPTION_REPLY_LANG:-${FLUENT_KOREAN_REPLY_LANG:-}}" | tr -d '"\\')
 case $style in *'"fluent-korean:'*) ;; *) lang= ;; esac
-lang_line=
+lang_line=; drift=; last=
 # Conditional on the user's own language, so a question typed in another language still
 # gets an answer in that language. The prefix up to "언어" stays fixed: measurement keys on it.
 [ -n "$lang" ] && lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 사용자가 직접 입력한 마지막 메시지를 ${lang}로 썼다면 ${lang}로 씁니다. 알림이나 다른 세션의 메시지로 시작된 턴에도 이 기준을 따릅니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다."
@@ -81,7 +81,7 @@ p = sys.argv[1]; rec = drift = fb = None
 try:
     size = os.path.getsize(p)
 except OSError:
-    print('none|'); sys.exit()
+    print('none|||'); sys.exit()
 for start in (max(0, size - 1000000), 0):
     with open(p, 'rb') as f:
         f.seek(start); lines = f.read().decode('utf-8', 'replace').splitlines()
@@ -96,7 +96,7 @@ for start in (max(0, size - 1000000), 0):
             ts = [b.get('text', '') for b in (m or []) if isinstance(b, dict) and b.get('type') == 'text' and b.get('text', '').strip()]
             if ts:
                 g, s, h, a = lang(ts[-1])
-                drift = re.sub(r'[\x00-\x1f"\\]', ' ', ' '.join(s.split()))[:60] if h < a * 0.2 and a >= 20 else ''
+                drift = re.sub(r'[\x00-\x1f"\\|]', ' ', ' '.join(s.split()))[:60] if h < a * 0.2 and a >= 20 else ''
         if not rec and r.get('type') == 'user' and (r.get('origin') or {}).get('kind') == 'human':
             s = text(m)
             # a side agent's note forwarded by the user: only the words typed after the quoted lines
@@ -118,17 +118,51 @@ try:
         g, s, h, a = lang(t)
         if a >= 40 and h * 5 < a: final = 'en'
 except AttributeError: pass
-print('%s|%s|%s' % (rec or 'none', drift or '', final))
+def sched(txt):  # the text of a scheduled task (CronCreate, or a task carried into the session), as in explainer's reader-screen.sh
+    k = json.dumps(txt, ensure_ascii=False)[1:-1].encode()
+    hit = lambda b: b'"prompt":"' + k + b'"' in b or b'"prompt": "' + k + b'"' in b
+    try:
+        with open(p, 'rb') as f:
+            if any(hit(l) for l in f if b'"name":"CronCreate"' in l or b'"name":"ScheduleWakeup"' in l or b'"type":"session_cron_carry"' in l): return True
+    except OSError: pass
+    try: return hit(open(os.path.join(os.environ.get('CLAUDE_PROJECT_DIR') or '.', '.claude', 'scheduled_tasks.json'), 'rb').read())
+    except OSError: return False
+def said():  # the last UserPromptSubmit language line the model got since its context started
+    try:
+        with open(p, 'rb') as f: b = f.read()
+    except OSError: return ''
+    lo, end, mark = max(0, b.rfind(b'"subtype":"compact_boundary"')), len(b), '(CLI 답변)의 언어'
+    while True:
+        i = b.rfind(mark.encode(), lo, end)
+        if i < 0: return ''
+        end, e = b.rfind(b'\n', 0, i) + 1, b.find(b'\n', i)
+        if b'"hook_additional_context"' not in b[end:e if e >= 0 else None]: continue  # request blobs carry the line too
+        try: r = json.loads(b[end:e if e >= 0 else None])
+        except ValueError: continue
+        a = r.get('attachment') or {}
+        if a.get('type') == 'hook_additional_context' and a.get('hookName') == 'UserPromptSubmit' and not r.get('isSidechain'):
+            return next((x for x in a.get('content') or [] if mark in x), '')
+# A prompt the owner did not type (a task notification, a peer or plugin message, a scheduled
+# prompt; told apart as in explainer's reader-screen.sh) gets the line only when it differs from the last one
+# the model got: a lead woken thousands of times a day otherwise reads the same line each time.
+last = ''
+try:
+    txt = str(pl.get('prompt') or '').lstrip()
+    if pl.get('hook_event_name') == 'UserPromptSubmit' and txt:
+        last = said()
+        if last and not (txt.startswith(('<', '[SYSTEM NOTIFICATION')) or re.match(r'(Another Claude session|The \S+ plugin) sent a message', txt) or sched(txt)): last = ''
+except AttributeError: pass
+print('%s|%s|%s|%s' % (rec or 'none', drift or '', final, last))
 PY
 )
   rm -f "$pf"
-  rec=${got%%|*}; rest=${got#*|}; drift=${rest%%|*}; final=${rest#*|}
+  rec=${got%%|*}; rest=${got#*|}; drift=${rest%%|*}; rest=${rest#*|}; final=${rest%%|*}; last=${rest#*|}
   case $rec in
     none|'') lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 이 세션에서 사용자가 직접 입력한 메시지가 아직 없으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
     ko) lang_line="사용자에게 쓰는 글(CLI 답변)의 언어: 한국어. 사용자가 직접 입력한 마지막 메시지가 한국어였으므로, 이번 응답과 중간 보고는 한국어로 씁니다. 직전 입력이 알림, 다른 세션의 메시지, hook 피드백, 스킬 본문처럼 영어로 되어 있어도 같습니다. 코드, 주석, 커밋 메시지, 다른 사람에게 보내는 글에는 적용하지 않습니다." ;;
   esac
   base=$lang_line
-  case $rec in none|''|ko) [ -n "$drift" ] && lang_line="${lang_line%%.*}. 직전에 사용자에게 쓴 글이 영어였습니다(「${drift}…」). ${lang_line#*. }" && skip= ;; esac
+  case $rec in none|''|ko) [ -n "$drift" ] && lang_line="${lang_line%%.*}. 직전에 사용자에게 쓴 글이 영어였습니다(「${drift}…」). ${lang_line#*. }" && skip= ;; *) drift= ;; esac
 fi
 
 if [ "$event" = Stop ]; then
@@ -137,12 +171,14 @@ if [ "$event" = Stop ]; then
 fi
 
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$1"; }
+# The whole text the model already got, on a prompt the owner did not type: nothing to add.
+same() { [ "$event" = UserPromptSubmit ] && [ -z "$drift" ] && [ -n "$last" ] && [ "$last" = "$1" ]; }
 
 # Built-in reminders also skip a turn woken by a background-task notification, which still
 # fires UserPromptSubmit with the notification as its prompt. The language line does not:
-# such a turn answers the user too.
+# such a turn answers the user too, though only when the line changed (see same above).
 case $input in *'"prompt"'*':'*'"<task-notification>'*)
-  [ -n "$lang_line" ] && emit "$lang_line"
+  [ -n "$lang_line" ] && ! same "$lang_line" && emit "$lang_line"
   exit 0 ;;
 esac
 
@@ -151,5 +187,5 @@ case $style in *fluent-korean*-concise'"') concise="간결하게 답합니다. �
 
 [ -n "$skip" ] && exit 0
 msg="$concise${concise:+${lang_line:+ }}$lang_line"
-[ -n "$msg" ] && emit "$msg"
+[ -n "$msg" ] && ! same "$msg" && emit "$msg"
 exit 0
